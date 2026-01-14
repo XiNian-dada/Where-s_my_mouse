@@ -1,60 +1,107 @@
-name: Manual Release Build
+name: Manual Release Build (x86 & x64)
 
-# 触发方式改为：手动触发 (Workflow Dispatch)
 on:
   workflow_dispatch:
     inputs:
       version:
         description: 'Release Version (e.g., v1.0)'
         required: true
-        default: 'v1.0' # 这里就是你想要的硬编码默认值
+        default: 'v1.0'
       message:
         description: 'Release Description'
         required: true
-        default: '手动构建发布'
+        default: '手动构建发布 (包含 32位 和 64位)'
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  # ==========================================
+  # 第一阶段：构建 (Build) - 并行运行两次
+  # ==========================================
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          # --- 64位 配置 ---
+          - arch: x64
+            sys: UCRT64
+            env: ucrt-x86_64
+            name_suffix: _x64
+          # --- 32位 配置 ---
+          - arch: x86
+            sys: MINGW32
+            env: i686
+            name_suffix: _x86
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      # 1. 配置 MSYS2 环境 (根据矩阵动态切换)
+      - name: Setup MSYS2 (${{ matrix.arch }})
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.sys }}
+          update: true
+          install: >-
+            git
+            base-devel
+            mingw-w64-${{ matrix.env }}-gcc
+            mingw-w64-${{ matrix.env }}-toolchain
+
+      # 2. 编译资源文件
+      - name: Compile Resources
+        shell: msys2 {0}
+        run: windres resources.rc -o resources.o
+
+      # 3. 编译 EXE (输出文件名加上 _x64 或 _x86 后缀)
+      # 注意：这里假设源文件是 Mouse_Highlighter.c，如果你的文件叫 Mouse_Highlighter.c 请修改这里
+      - name: Compile EXE
+        shell: msys2 {0}
+        run: |
+          gcc Mouse_Highlighter.c resources.o -o "Where's My Mouse${{ matrix.name_suffix }}.exe" \
+            -O2 -s \
+            -municode \
+            -mwindows \
+            -lgdi32 -luser32 -ldwmapi -lcomdlg32 -lcomctl32 -ladvapi32 -lshell32 -lwinmm
+
+      # 4. 上传构建产物 (存到 GitHub 临时空间)
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: "Where's My Mouse${{ matrix.name_suffix }}.exe"
+
+  # ==========================================
+  # 第二阶段：发布 (Release) - 等上面都跑完
+  # ==========================================
+  release:
+    needs: build # 必须等 build 任务全部成功
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup MSYS2
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: UCRT64
-        update: true
-        install: >-
-          git
-          base-devel
-          mingw-w64-ucrt-x86_64-gcc
-          mingw-w64-ucrt-x86_64-toolchain
+      # 1. 下载 x64 文件
+      - name: Download x64 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-x64
 
-    # 1. 编译资源文件 (把版本号打进 exe)
-    - name: Compile Resources
-      shell: msys2 {0}
-      run: windres resources.rc -o resources.o
+      # 2. 下载 x86 文件
+      - name: Download x86 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-x86
 
-    # 2. 编译主程序 (链接资源文件)
-    - name: Compile EXE
-      shell: msys2 {0}
-      run: |
-        gcc main.c resources.o -o "Where's My Mouse.exe" \
-          -O2 -s \
-          -municode \
-          -mwindows \
-          -lgdi32 -luser32 -ldwmapi -lcomdlg32 -lcomctl32 -ladvapi32 -lshell32 -lwinmm
-
-    # 3. 发布 Release
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ inputs.version }} # 使用你手动输入的版本号
-        name: Release ${{ inputs.version }}
-        body: ${{ inputs.message }}
-        files: "Where's My Mouse.exe"
-        draft: false
-        prerelease: false
+      # 3. 创建 Release 并上传两个文件
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
+          body: ${{ inputs.message }}
+          files: |
+            Where's My Mouse_x64.exe
+            Where's My Mouse_x86.exe
+          draft: false
+          prerelease: false
