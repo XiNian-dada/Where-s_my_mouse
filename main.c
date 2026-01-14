@@ -10,6 +10,8 @@
 #include <dwmapi.h>
 #include <commdlg.h>
 #include <commctrl.h>
+#include <shellapi.h>
+#include <mmsystem.h> // 【新增】多媒体定时器头文件
 #include <stdio.h>
 #include <stdbool.h>
 #include <wchar.h>
@@ -25,15 +27,21 @@
 #define IDC_SLIDER_FPS 108
 #define IDC_LABEL_FPS 109
 #define IDC_STATUS_BAR 110
+#define IDC_CHECK_AUTOSTART 111
+
+#define WM_TRAYICON (WM_USER + 2)
+#define ID_TRAY_ICON 1001
+#define ID_MENU_SETTINGS 2001
+#define ID_MENU_EXIT 2002
 
 // --- 全局配置 ---
 typedef struct {
-    int radius;         // 半径
-    int opacity;        // 不透明度
-    COLORREF color;     // 颜色
-    int show_dot;       // 中心点
-    int vsync;          // 垂直同步 (1=开启)
-    int target_fps;     // 目标帧率 (30-144)
+    int radius;
+    int opacity;
+    COLORREF color;
+    int show_dot;
+    int vsync;
+    int target_fps;
 } Config;
 
 Config g_conf;
@@ -41,20 +49,62 @@ HWND g_hOverlay = NULL;
 HWND g_hSettings = NULL;
 HBRUSH g_hBrushBg = NULL;
 HBRUSH g_hBrushDot = NULL;
-HFONT g_hFont = NULL; // 界面字体
+HFONT g_hFont = NULL;
 bool g_overlayVisible = true;
 wchar_t g_iniPath[MAX_PATH];
+NOTIFYICONDATAW g_nid;
 
-// --- 性能统计 ---
 double g_currentFps = 0.0;
 LARGE_INTEGER g_frequency;
 
 // --- 辅助函数 ---
 
-// 1. 设置更现代的字体 (微软雅黑)
+bool IsAutoStartEnabled() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t path[MAX_PATH];
+        DWORD len = sizeof(path);
+        DWORD type;
+        if (RegQueryValueExW(hKey, L"MouseHighlighter", NULL, &type, (LPBYTE)path, &len) == ERROR_SUCCESS) {
+            RegCloseKey(hKey);
+            return true;
+        }
+        RegCloseKey(hKey);
+    }
+    return false;
+}
+
+void SetAutoStart(bool enable) {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        if (enable) {
+            wchar_t path[MAX_PATH];
+            GetModuleFileNameW(NULL, path, MAX_PATH);
+            RegSetValueExW(hKey, L"MouseHighlighter", 0, REG_SZ, (LPBYTE)path, (wcslen(path) + 1) * sizeof(wchar_t));
+        } else {
+            RegDeleteValueW(hKey, L"MouseHighlighter");
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+void InitTrayIcon(HWND hwnd) {
+    g_nid.cbSize = sizeof(NOTIFYICONDATAW);
+    g_nid.hWnd = hwnd;
+    g_nid.uID = ID_TRAY_ICON;
+    g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    g_nid.uCallbackMessage = WM_TRAYICON;
+    g_nid.hIcon = LoadIcon(NULL, IDI_ASTERISK); 
+    wcscpy(g_nid.szTip, L"Mouse Highlighter (运行中)");
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
+}
+
+void RemoveTrayIcon() {
+    Shell_NotifyIconW(NIM_DELETE, &g_nid);
+}
+
 void SetModernFont(HWND hwndChild) {
     if (!g_hFont) {
-        // 创建系统界面字体
         NONCLIENTMETRICSW ncm = {sizeof(NONCLIENTMETRICSW)};
         SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICSW), &ncm, 0);
         g_hFont = CreateFontIndirectW(&ncm.lfMessageFont);
@@ -62,7 +112,6 @@ void SetModernFont(HWND hwndChild) {
     SendMessage(hwndChild, WM_SETFONT, (WPARAM)g_hFont, TRUE);
 }
 
-// 2. 宽字符 INI 读写
 void LoadConfig() {
     GetCurrentDirectoryW(MAX_PATH, g_iniPath);
     wcscat(g_iniPath, L"\\mouse_highlighter.ini");
@@ -105,7 +154,6 @@ void UpdateOverlayStyle() {
     InvalidateRect(g_hOverlay, NULL, TRUE);
 }
 
-// --- 窗口过程 ---
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_PAINT) {
         PAINTSTRUCT ps;
@@ -129,15 +177,14 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     static HWND hSliderRadius, hSliderOpacity, hBtnColor, hCheckDot, hLblRadius, hLblOpacity;
-    static HWND hCheckVsync, hSliderFps, hLblFps, hStatus;
+    static HWND hCheckVsync, hSliderFps, hLblFps, hStatus, hCheckAutostart;
     wchar_t buf[64];
 
     switch (msg) {
         case WM_CREATE: {
+            InitTrayIcon(hwnd);
             int y = 10;
-            // 样式设置组
             SetModernFont(CreateWindowW(L"BUTTON", L"外观设置", WS_VISIBLE | WS_CHILD | BS_GROUPBOX, 10, y, 260, 170, hwnd, NULL, NULL, NULL));
-            
             y += 25;
             SetModernFont(CreateWindowW(L"STATIC", L"大小 (Radius):", WS_VISIBLE | WS_CHILD, 20, y, 100, 20, hwnd, NULL, NULL, NULL));
             hSliderRadius = CreateWindowW(TRACKBAR_CLASSW, NULL, WS_VISIBLE | WS_CHILD | TBS_AUTOTICKS, 20, y + 20, 180, 30, hwnd, (HMENU)IDC_SLIDER_RADIUS, NULL, NULL);
@@ -162,12 +209,16 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             SetModernFont(hCheckDot);
             if (g_conf.show_dot) SendMessage(hCheckDot, BM_SETCHECK, BST_CHECKED, 0);
 
-            // 性能设置组
             y += 40;
-            SetModernFont(CreateWindowW(L"BUTTON", L"性能与帧率", WS_VISIBLE | WS_CHILD | BS_GROUPBOX, 10, y, 260, 100, hwnd, NULL, NULL, NULL));
+            SetModernFont(CreateWindowW(L"BUTTON", L"系统与性能", WS_VISIBLE | WS_CHILD | BS_GROUPBOX, 10, y, 260, 130, hwnd, NULL, NULL, NULL));
             
             y += 25;
-            hCheckVsync = CreateWindowW(L"BUTTON", L"开启垂直同步 (VSync, 推荐)", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 20, y, 230, 20, hwnd, (HMENU)IDC_CHECK_VSYNC, NULL, NULL);
+            hCheckAutostart = CreateWindowW(L"BUTTON", L"开机自动启动 (Registry)", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 20, y, 230, 20, hwnd, (HMENU)IDC_CHECK_AUTOSTART, NULL, NULL);
+            SetModernFont(hCheckAutostart);
+            if (IsAutoStartEnabled()) SendMessage(hCheckAutostart, BM_SETCHECK, BST_CHECKED, 0);
+
+            y += 25;
+            hCheckVsync = CreateWindowW(L"BUTTON", L"开启垂直同步 (VSync)", WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX, 20, y, 230, 20, hwnd, (HMENU)IDC_CHECK_VSYNC, NULL, NULL);
             SetModernFont(hCheckVsync);
             if (g_conf.vsync) SendMessage(hCheckVsync, BM_SETCHECK, BST_CHECKED, 0);
 
@@ -180,19 +231,39 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             hLblFps = CreateWindowW(L"STATIC", L"", WS_VISIBLE | WS_CHILD, 210, y, 50, 20, hwnd, (HMENU)IDC_LABEL_FPS, NULL, NULL);
             SetModernFont(hLblFps);
 
-            // 底部状态栏
-            hStatus = CreateWindowW(L"STATIC", L"初始化...", WS_VISIBLE | WS_CHILD | SS_SUNKEN, 0, 320, 300, 20, hwnd, (HMENU)IDC_STATUS_BAR, NULL, NULL);
+            hStatus = CreateWindowW(L"STATIC", L"初始化...", WS_VISIBLE | WS_CHILD | SS_SUNKEN, 0, 350, 300, 20, hwnd, (HMENU)IDC_STATUS_BAR, NULL, NULL);
             SetModernFont(hStatus);
 
-            // 触发一次UI刷新
             SendMessage(hwnd, WM_HSCROLL, 0, (LPARAM)hSliderRadius);
             SendMessage(hwnd, WM_HSCROLL, 0, (LPARAM)hSliderOpacity);
             SendMessage(hwnd, WM_HSCROLL, 0, (LPARAM)hSliderFps);
             break;
         }
 
+        case WM_TRAYICON: {
+            if (lParam == WM_RBUTTONUP) {
+                POINT pt; GetCursorPos(&pt);
+                HMENU hMenu = CreatePopupMenu();
+                AppendMenuW(hMenu, MF_STRING, ID_MENU_SETTINGS, L"设置 (Settings)");
+                AppendMenuW(hMenu, MF_STRING, ID_MENU_EXIT, L"退出 (Exit)");
+                SetForegroundWindow(hwnd); 
+                int cmd = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, NULL);
+                if (cmd == ID_MENU_SETTINGS) {
+                    ShowWindow(hwnd, SW_SHOWNORMAL);
+                    SetForegroundWindow(hwnd);
+                } else if (cmd == ID_MENU_EXIT) PostQuitMessage(0);
+                DestroyMenu(hMenu);
+            } else if (lParam == WM_LBUTTONUP) {
+                if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
+                else {
+                    ShowWindow(hwnd, SW_SHOWNORMAL);
+                    SetForegroundWindow(hwnd);
+                }
+            }
+            break;
+        }
+
         case WM_HSCROLL: {
-            // UI 更新逻辑
             if ((HWND)lParam == hSliderRadius) {
                 g_conf.radius = SendMessage(hSliderRadius, TBM_GETPOS, 0, 0);
                 swprintf(buf, 64, L"%d px", g_conf.radius); SetWindowTextW(hLblRadius, buf);
@@ -204,7 +275,6 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             } else if ((HWND)lParam == hSliderFps) {
                 g_conf.target_fps = SendMessage(hSliderFps, TBM_GETPOS, 0, 0);
                 swprintf(buf, 64, L"%d FPS", g_conf.target_fps); SetWindowTextW(hLblFps, buf);
-                // 如果开启了 VSync，禁用 FPS 滑动条
                 BOOL vsync = (SendMessage(hCheckVsync, BM_GETCHECK, 0, 0) == BST_CHECKED);
                 EnableWindow(hSliderFps, !vsync);
             }
@@ -232,33 +302,33 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 SaveConfig();
             } else if (id == IDC_CHECK_VSYNC) {
                 g_conf.vsync = (SendMessage(hCheckVsync, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                // 刷新 FPS 滑动条状态
                 SendMessage(hwnd, WM_HSCROLL, 0, (LPARAM)hSliderFps);
                 SaveConfig();
+            } else if (id == IDC_CHECK_AUTOSTART) {
+                bool enable = (SendMessage(hCheckAutostart, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                SetAutoStart(enable);
             }
             break;
         }
         
-        // 接收主循环发来的 FPS 更新消息
         case WM_USER + 1: {
-            swprintf(buf, 64, L" 实时性能: %.1f FPS | 快捷键: Ctrl + F1", g_currentFps);
+            swprintf(buf, 64, L" 实时性能: %.1f FPS | 双击托盘打开设置", g_currentFps);
             SetWindowTextW(hStatus, buf);
             break;
         }
 
-        case WM_CLOSE:
-            ShowWindow(hwnd, SW_HIDE);
-            return 0;
+        case WM_CLOSE: ShowWindow(hwnd, SW_HIDE); return 0;
+        case WM_DESTROY: RemoveTrayIcon(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-// wWinMain 是 Unicode 程序的入口
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     SetProcessDPIAware();
-    LoadConfig();
     
-    // 高精度计时器频率
+    timeBeginPeriod(1);
+
+    LoadConfig();
     QueryPerformanceFrequency(&g_frequency);
     
     INITCOMMONCONTROLSEX icex = {sizeof(icex), ICC_WIN95_CLASSES};
@@ -275,7 +345,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     wcSettings.lpfnWndProc = SettingsWndProc;
     wcSettings.hInstance = hInstance;
     wcSettings.lpszClassName = L"SettingsClass";
-    wcSettings.hbrBackground = (HBRUSH)(COLOR_WINDOW); // 使用系统颜色
+    wcSettings.hbrBackground = (HBRUSH)(COLOR_WINDOW); 
     wcSettings.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassW(&wcSettings);
 
@@ -293,7 +363,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_hSettings = CreateWindowW(
         L"SettingsClass", L"高亮设置 (Mouse Highlighter)", 
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, 
-        (screenW - 300) / 2, (screenH - 350) / 2, 300, 380, 
+        (screenW - 300) / 2, (screenH - 420) / 2, 300, 420, 
         NULL, NULL, hInstance, NULL
     );
 
@@ -302,29 +372,27 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     MSG msg = {0};
     bool lastCtrlState = false;
     bool lastSettingsKeyState = false;
-    
-    // FPS 计算变量
     LARGE_INTEGER lastTime, currentTime;
     QueryPerformanceCounter(&lastTime);
     int frameCount = 0;
     double timeAccumulator = 0.0;
 
-    // --- 主循环 ---
     while (true) {
-        // 处理消息队列
         while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) return 0;
+            if (msg.message == WM_QUIT) {
+                // 【关键】退出前恢复定时器设置
+                timeEndPeriod(1);
+                return 0;
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
 
-        // 1. 快捷键逻辑
         bool currentCtrlState = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
         if (currentCtrlState && !lastCtrlState) {
             g_overlayVisible = !g_overlayVisible;
             if (g_overlayVisible) {
                 ShowWindow(g_hOverlay, SW_SHOWNOACTIVATE);
-                // 唤醒时瞬移
                 POINT pt; GetCursorPos(&pt);
                 SetWindowPos(g_hOverlay, HWND_TOPMOST, pt.x - g_conf.radius, pt.y - g_conf.radius, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOOWNERZORDER);
             } else {
@@ -345,7 +413,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         }
         lastSettingsKeyState = (ctrlDown && f1Down);
 
-        // 2. 窗口跟随与渲染
         if (g_overlayVisible) {
             POINT pt;
             GetCursorPos(&pt);
@@ -354,37 +421,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
                          0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOOWNERZORDER);
         }
 
-        // 3. 帧率控制 (VSync 或 手动限帧)
         if (g_conf.vsync) {
-            DwmFlush(); // 垂直同步，由系统决定等待时间
+            DwmFlush();
         } else {
-            // 手动限帧 (Spin-wait 或者 Sleep)
             double targetFrameTime = 1.0 / (double)g_conf.target_fps;
             LARGE_INTEGER now;
             do {
                 QueryPerformanceCounter(&now);
                 double elapsed = (double)(now.QuadPart - lastTime.QuadPart) / (double)g_frequency.QuadPart;
                 if (elapsed >= targetFrameTime) break;
-                // 如果剩余时间较多，可以短暂 Sleep 节省 CPU，否则忙等待以保证精度
                 if (targetFrameTime - elapsed > 0.002) Sleep(1); 
             } while (true);
         }
 
-        // 4. 计算真实 FPS
         QueryPerformanceCounter(&currentTime);
         double dt = (double)(currentTime.QuadPart - lastTime.QuadPart) / (double)g_frequency.QuadPart;
         lastTime = currentTime;
-        
         timeAccumulator += dt;
         frameCount++;
-        if (timeAccumulator >= 0.5) { // 每0.5秒更新一次显示
+        if (timeAccumulator >= 0.5) {
             g_currentFps = frameCount / timeAccumulator;
             frameCount = 0;
             timeAccumulator = 0.0;
-            // 发送更新消息给设置窗口
-            if (IsWindowVisible(g_hSettings)) {
-                SendMessage(g_hSettings, WM_USER + 1, 0, 0);
-            }
+            if (IsWindowVisible(g_hSettings)) SendMessage(g_hSettings, WM_USER + 1, 0, 0);
         }
     }
     return 0;

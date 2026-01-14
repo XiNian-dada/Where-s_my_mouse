@@ -15,9 +15,12 @@
                 "-luser32",
                 "-mwindows",
                 "-ldwmapi",
-                "-lcomdlg32",  // 新增：颜色选择器
-                "-lcomctl32",   // 新增：滑动条控件
-                "-municode"
+                "-lcomdlg32", 
+                "-lcomctl32",  
+                "-municode",
+                "-ladvapi32", 
+                "-lshell32",
+                "-lwinmm"    
             ],
             "options": {
                 "cwd": "${fileDirname}"
