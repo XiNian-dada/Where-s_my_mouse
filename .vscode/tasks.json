@@ -1,38 +1,26 @@
 {
     "tasks": [
         {
-            "type": "cppbuild",
-            "label": "C/C++: gcc.exe 生成活动文件",
-            "command": "C:\\msys64\\ucrt64\\bin\\gcc.exe",
+            "type": "shell", // 改为 shell 类型以支持多条命令
+            "label": "Build with Resources",
+            "command": "C:\\msys64\\ucrt64\\bin\\windres.exe resources.rc -o resources.o && C:\\msys64\\ucrt64\\bin\\gcc.exe",
             "args": [
                 "-fdiagnostics-color=always",
-                "-O2",
-                "-s",
-                "${file}",
-                "-o",
-                "${fileDirname}\\${fileBasenameNoExtension}.exe",
-                "-lgdi32",
-                "-luser32",
-                "-mwindows",
-                "-ldwmapi",
-                "-lcomdlg32", 
-                "-lcomctl32",  
-                "-municode",
-                "-ladvapi32", 
-                "-lshell32",
-                "-lwinmm"    
+                "-O2", "-s",
+                "main.c", "resources.o",
+                "-o", "${fileDirname}\\Where's My Mouse.exe",
+                "-lgdi32", "-luser32", "-mwindows", "-ldwmapi", 
+                "-lcomdlg32", "-lcomctl32", "-municode", 
+                "-ladvapi32", "-lshell32", "-lwinmm"
             ],
             "options": {
                 "cwd": "${fileDirname}"
             },
-            "problemMatcher": [
-                "$gcc"
-            ],
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
-            "detail": "调试器生成的任务。"
+            "detail": "编译并包含版本信息"
         }
     ],
     "version": "2.0.0"

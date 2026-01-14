@@ -1,0 +1,34 @@
+#include <windows.h>
+
+// 1. 设置程序图标 (确保你目录下有个 icon.ico，没有的话删掉这行)
+IDI_ICON1 ICON "icon.ico"
+
+// 2. 版本信息 (这就是你要的硬编码！)
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   0x3fL
+FILEFLAGS       0x0L
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0" // 中文 (简体)
+        BEGIN
+            VALUE "CompanyName",      "My Personal Tools"
+            VALUE "FileDescription",  "Where's My Mouse - 鼠标高亮工具"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "MouseHighlighter"
+            VALUE "LegalCopyright",   "Copyright (C) 2024"
+            VALUE "OriginalFilename", "Where's My Mouse.exe"
+            VALUE "ProductName",      "Where's My Mouse"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
