@@ -1,26 +1,24 @@
 {
     "tasks": [
         {
-            "type": "shell", // 改为 shell 类型以支持多条命令
-            "label": "Build with Resources",
-            "command": "C:\\msys64\\ucrt64\\bin\\windres.exe resources.rc -o resources.o && C:\\msys64\\ucrt64\\bin\\gcc.exe",
+            "type": "shell",
+            "label": "Build Mouse Highlighter",
+            "command": "cmd", 
             "args": [
-                "-fdiagnostics-color=always",
-                "-O2", "-s",
-                "main.c", "resources.o",
-                "-o", "${fileDirname}\\Where's My Mouse.exe",
-                "-lgdi32", "-luser32", "-mwindows", "-ldwmapi", 
-                "-lcomdlg32", "-lcomctl32", "-municode", 
-                "-ladvapi32", "-lshell32", "-lwinmm"
+                "/C",
+                // 1. 移除了文件名里的单引号，改成了 MouseHighlighter.exe (安全!)
+                // 2. 注意：请确保你已经完成了【第一步】，把文件夹名里的单引号去掉了，否则下面这行依然会报错
+                "C:\\msys64\\ucrt64\\bin\\windres.exe resources.rc -o resources.o && C:\\msys64\\ucrt64\\bin\\gcc.exe -fdiagnostics-color=always -O2 -s Mouse_Highlighter.c resources.o -o \"${workspaceFolder}\\MouseHighlighter.exe\" -lgdi32 -luser32 -mwindows -ldwmapi -lcomdlg32 -lcomctl32 -municode -ladvapi32 -lshell32 -lwinmm"
             ],
             "options": {
-                "cwd": "${fileDirname}"
+                "cwd": "${workspaceFolder}"
             },
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
-            "detail": "编译并包含版本信息"
+            "problemMatcher": ["$gcc"],
+            "detail": "Release构建 (安全路径版)"
         }
     ],
     "version": "2.0.0"

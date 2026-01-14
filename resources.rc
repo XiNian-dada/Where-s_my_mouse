@@ -1,7 +1,7 @@
 #include <windows.h>
 
 // 1. 设置程序图标 (确保你目录下有个 icon.ico，没有的话删掉这行)
-IDI_ICON1 ICON "icon.ico"
+101 ICON "icon.ico"
 
 // 2. 版本信息 (这就是你要的硬编码！)
 VS_VERSION_INFO VERSIONINFO

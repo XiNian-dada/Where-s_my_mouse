@@ -11,7 +11,7 @@
 #include <commdlg.h>
 #include <commctrl.h>
 #include <shellapi.h>
-#include <mmsystem.h> // 【新增】多媒体定时器头文件
+#include <mmsystem.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <wchar.h>
@@ -28,6 +28,9 @@
 #define IDC_LABEL_FPS 109
 #define IDC_STATUS_BAR 110
 #define IDC_CHECK_AUTOSTART 111
+
+// 自定义图标资源ID (必须与 resources.rc 中的 ID 一致)
+#define IDI_APP_ICON 101 
 
 #define WM_TRAYICON (WM_USER + 2)
 #define ID_TRAY_ICON 1001
@@ -94,7 +97,16 @@ void InitTrayIcon(HWND hwnd) {
     g_nid.uID = ID_TRAY_ICON;
     g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_TRAYICON;
-    g_nid.hIcon = LoadIcon(NULL, IDI_ASTERISK); 
+    
+    // 【修改】加载自定义图标 (ID 101)
+    // GetModuleHandle(NULL) 获取当前 exe 的实例句柄
+    g_nid.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_APP_ICON));
+    
+    // 如果加载失败（比如资源文件没编进去），回退到系统图标，防止空白
+    if (!g_nid.hIcon) {
+        g_nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    }
+
     wcscpy(g_nid.szTip, L"Mouse Highlighter (运行中)");
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 }
@@ -326,6 +338,14 @@ LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     SetProcessDPIAware();
     
+    // 【新增】防止程序重复运行
+    // 创建一个具名互斥体，名字越独特越好
+    HANDLE hMutex = CreateMutexW(NULL, TRUE, L"Global\\MouseHighlighter_Unique_Mutex_v1");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        MessageBoxW(NULL, L"程序已经在运行中！请检查系统托盘。", L"提示", MB_OK | MB_ICONINFORMATION);
+        return 0; // 直接退出
+    }
+
     timeBeginPeriod(1);
 
     LoadConfig();
@@ -339,6 +359,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     wcOverlay.hInstance = hInstance;
     wcOverlay.lpszClassName = L"OverlayClass";
     wcOverlay.hCursor = LoadCursor(NULL, IDC_ARROW);
+    // 加载自定义图标
+    wcOverlay.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
     RegisterClassW(&wcOverlay);
 
     WNDCLASSW wcSettings = {0};
@@ -347,6 +369,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     wcSettings.lpszClassName = L"SettingsClass";
     wcSettings.hbrBackground = (HBRUSH)(COLOR_WINDOW); 
     wcSettings.hCursor = LoadCursor(NULL, IDC_ARROW);
+    // 加载自定义图标
+    wcSettings.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
     RegisterClassW(&wcSettings);
 
     int d = g_conf.radius * 2;
@@ -380,7 +404,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     while (true) {
         while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) {
-                // 【关键】退出前恢复定时器设置
                 timeEndPeriod(1);
                 return 0;
             }
